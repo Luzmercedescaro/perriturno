@@ -1,5 +1,11 @@
 # Specs de desarrollo - Perriturno
 
+## Resumen general de reglas de negocio
+
+Perriturno operará con atención de martes a domingo, en un rango horario de 9:00 a. m. a 6:00 p. m. No habrá atención entre las 12:00 m. y la 1:30 p. m. por la hora de almuerzo. El negocio contará con una sola persona encargada de bañar y arreglar a las mascotas, por lo que no pueden existir dos reservas activas al mismo tiempo y las reservas no pueden solaparse.
+
+La duración de cada reserva dependerá del tamaño de la mascota: 2 horas para mascotas pequeñas y 3 horas para mascotas grandes. El sistema deberá calcular automáticamente la hora de finalización de la reserva según la hora de inicio y la duración correspondiente. Asimismo, deberá rechazar reservas que crucen el almuerzo, terminen después de las 6:00 p. m. o se crucen con otra reserva activa. Si una reserva se cancela, su horario podrá quedar disponible nuevamente siempre y cuando no exista otra reserva activa para ese mismo intervalo.
+
 ## 1. Lista de specs necesarias, ordenadas por dependencia
 
 El siguiente orden prioriza la construcción incremental del sistema: primero la base técnica y seguridad, luego los módulos de negocio que dependen de ella, y finalmente la lógica de reservas y administración.
