@@ -1,19 +1,12 @@
-import { Body, Controller, Get, Post, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
-import { Request } from 'express';
+import { Body, Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { User, UserRole } from './user.entity';
 import { UsersService } from './users.service';
-
-interface AuthenticatedRequest extends Request {
-  user?: {
-    id: string;
-    email: string;
-    role: string;
-  };
-}
 
 @Controller('users')
 export class UsersController {
@@ -26,12 +19,19 @@ export class UsersController {
 
   @UseGuards(JwtAuthGuard)
   @Get('profile')
-  getProfile(@Req() req: AuthenticatedRequest): Omit<User, 'password'> {
-    if (!req.user) {
-      throw new UnauthorizedException('Usuario no autenticado');
-    }
+  async getProfile(@Req() req: Request): Promise<Omit<User, 'password'>> {
+    const user = req.user as { id: string };
+    return this.usersService.findProfileById(user.id);
+  }
 
-    return req.user as Omit<User, 'password'>;
+  @UseGuards(JwtAuthGuard)
+  @Patch('profile')
+  async updateProfile(
+    @Req() req: Request,
+    @Body() updateUserProfileDto: UpdateUserProfileDto,
+  ): Promise<Omit<User, 'password'>> {
+    const user = req.user as { id: string };
+    return this.usersService.updateProfile(user.id, updateUserProfileDto);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
