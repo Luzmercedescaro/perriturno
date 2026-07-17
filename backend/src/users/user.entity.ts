@@ -1,4 +1,5 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn, Unique } from 'typeorm';
+import { Column, CreateDateColumn, Entity, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn, Unique } from 'typeorm';
+import { Pet } from '../pets/pet.entity';
 
 export enum UserRole {
   CLIENTE = 'CLIENTE',
@@ -32,6 +33,9 @@ export class User {
 
   @Column({ default: true })
   active: boolean;
+
+  @OneToMany(() => Pet, (pet) => pet.owner)
+  pets: Pet[];
 
   @CreateDateColumn()
   createdAt: Date;
