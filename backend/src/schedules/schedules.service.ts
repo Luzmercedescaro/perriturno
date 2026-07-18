@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { ServicesService } from '../services/services.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
+import { QueryAvailabilityDto } from './dto/query-availability.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { Schedule, ScheduleStatus, PetSize } from './schedule.entity';
 
@@ -15,6 +17,7 @@ export class SchedulesService {
   constructor(
     @InjectRepository(Schedule)
     private readonly scheduleRepository: Repository<Schedule>,
+    private readonly servicesService: ServicesService,
   ) {}
 
   async create(createScheduleDto: CreateScheduleDto): Promise<Schedule> {
@@ -31,6 +34,111 @@ export class SchedulesService {
   async findAll(): Promise<Schedule[]> {
     return this.scheduleRepository.find({ order: { scheduleDate: 'ASC', startTime: 'ASC' } });
   }
+   async findAvailability(query: QueryAvailabilityDto): Promise<{
+  scheduleDate: string;
+  service: { id: string; name: string };
+  petSize: PetSize;
+  available: Schedule[];
+  occupied: Schedule[];
+  blocked: Schedule[];
+  message: string;
+}> {
+  const scheduleDate = query.scheduleDate?.trim();
+
+  if (!scheduleDate) {
+    throw new BadRequestException('La fecha de consulta es obligatoria.');
+  }
+
+  if (!query.serviceId?.trim()) {
+    throw new BadRequestException('El servicio es obligatorio.');
+  }
+
+  if (!query.petSize?.trim()) {
+    throw new BadRequestException('El tamaño de la mascota es obligatorio.');
+  }
+
+  const day = this.getWeekday(scheduleDate);
+  if (day === 1) {
+    throw new BadRequestException('La atención solo está disponible de martes a domingo.');
+  }
+
+  const service = await this.servicesService.findActiveById(query.serviceId.trim());
+  const petSize = this.normalizePetSize(query.petSize.toLowerCase().trim());
+  const requestedStatus = query.status ? this.normalizeStatus(query.status) : undefined;
+
+  const schedules = await this.scheduleRepository.find({
+    where: { scheduleDate, active: true },
+    order: { startTime: 'ASC' },
+  });
+
+  const compatibleSchedules = schedules.filter((schedule) => {
+    const startMinutes = this.toMinutes(schedule.startTime);
+    const endMinutes = this.toMinutes(schedule.endTime);
+
+    if (startMinutes === null || endMinutes === null) {
+      return false;
+    }
+
+    if (
+      startMinutes < this.openingHour ||
+      endMinutes > this.closingHour ||
+      this.crossesLunch(startMinutes, endMinutes)
+    ) {
+      return false;
+    }
+
+    if (schedule.petSize !== petSize) {
+      return false;
+    }
+
+    if (schedule.serviceName?.trim().toLowerCase() !== service.name.trim().toLowerCase()) {
+      return false;
+    }
+
+    if (query.startTime && schedule.startTime.slice(0, 5) !== query.startTime.trim()) {
+      return false;
+    }
+
+    if (requestedStatus && schedule.status !== requestedStatus) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const available = compatibleSchedules.filter(
+    (schedule) => schedule.status === ScheduleStatus.DISPONIBLE,
+  );
+  const occupied = compatibleSchedules.filter(
+    (schedule) => schedule.status === ScheduleStatus.OCUPADO,
+  );
+  const blocked = compatibleSchedules.filter(
+    (schedule) => schedule.status === ScheduleStatus.BLOQUEADO,
+  );
+
+  return {
+    scheduleDate,
+    service: {
+      id: service.id,
+      name: service.name,
+    },
+    petSize,
+    available,
+    occupied,
+    blocked,
+    message: requestedStatus
+  ? compatibleSchedules.length > 0
+    ? 'Se encontraron horarios con el estado solicitado.'
+    : 'No se encontraron horarios con el estado solicitado.'
+  : query.startTime?.trim()
+    ? compatibleSchedules.length > 0
+      ? 'Se encontraron horarios para la hora solicitada.'
+      : 'No se encontraron horarios para la hora solicitada.'
+    : available.length > 0
+      ? 'Se encontraron horarios disponibles.'
+      : 'No hay horarios disponibles para la fecha seleccionada.',
+  };
+}
 
   async findById(id: string): Promise<Schedule> {
     const schedule = await this.scheduleRepository.findOneBy({ id });
@@ -84,7 +192,7 @@ export class SchedulesService {
     }
 
     const day = this.getWeekday(scheduleDate);
-    if (day === 0 || day === 1) {
+    if (day === 1) {
       throw new BadRequestException('La atención solo está permitida de martes a domingo.');
     }
 

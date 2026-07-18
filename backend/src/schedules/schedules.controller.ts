@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../users/user.entity';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
+import { QueryAvailabilityDto } from './dto/query-availability.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 import { Schedule, ScheduleStatus } from './schedule.entity';
 import { SchedulesService } from './schedules.service';
@@ -24,6 +25,11 @@ export class SchedulesController {
   @Get()
   async findAll(): Promise<Schedule[]> {
     return this.schedulesService.findAll();
+  }
+
+  @Get('availability')
+  async findAvailability(@Query() query: QueryAvailabilityDto) {
+    return this.schedulesService.findAvailability(query);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
