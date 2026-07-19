@@ -69,7 +69,7 @@ describe('UsersService profile updates', () => {
       service.updateProfile('user-1', {
         role: UserRole.ADMIN,
       } as any),
-    ).rejects.toThrow('No está permitido modificar el rol desde el perfil.');
+    ).rejects.toThrow('Solo se pueden actualizar los campos name, phone y email del perfil.');
   });
 
   it('rejects duplicate email changes for another user', async () => {

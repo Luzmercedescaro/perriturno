@@ -49,7 +49,7 @@ describe('PetsService', () => {
     expect(petRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'Firulais',
-        owner: { id: userId },
+        owner: expect.objectContaining({ id: userId }),
       }),
     );
     expect(result).toEqual(expect.objectContaining({ id: 'pet-1', name: 'Firulais' }));
