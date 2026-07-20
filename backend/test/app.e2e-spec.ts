@@ -4,7 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
 import { AppModule } from './../src/app.module';
-import { User } from './../src/users/user.entity';
+import { User, UserRole } from './../src/users/user.entity';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
@@ -120,6 +120,85 @@ describe('AppController (e2e)', () => {
     } finally {
       // Limpieza: eliminar el usuario creado
       await dataSource.getRepository(User).delete({ email });
+    }
+  });
+
+  it('autorización por roles (e2e)', async () => {
+    const ts = Date.now();
+    const emailCliente = `e2e.cliente.${ts}@perriturno.test`;
+    const emailAdmin = `e2e.admin.${ts}@perriturno.test`;
+    const password = 'Prueba123*';
+    const dataSource = moduleFixture.get<DataSource>(DataSource);
+    const userRepo = dataSource.getRepository(User);
+
+    try {
+      // 1. Registrar ambos usuarios
+      await request(app.getHttpServer())
+        .post('/users/register')
+        .send({ name: 'Cliente E2E', phone: '3001111111', email: emailCliente, password })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/users/register')
+        .send({ name: 'Admin E2E', phone: '3002222222', email: emailAdmin, password })
+        .expect(201);
+
+      // 2. Promover al segundo usuario a ADMIN directamente en la BD
+      await userRepo.update({ email: emailAdmin }, { role: UserRole.ADMIN });
+
+      // 3. Obtener tokens
+      const loginCliente = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: emailCliente, password })
+        .expect(201);
+      const tokenCliente: string = loginCliente.body.access_token;
+
+      const loginAdmin = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: emailAdmin, password })
+        .expect(201);
+      const tokenAdmin: string = loginAdmin.body.access_token;
+
+      // 4. GET /users sin token → 401
+      await request(app.getHttpServer())
+        .get('/users')
+        .expect(401);
+
+      // 5. GET /users con token CLIENTE → 403
+      await request(app.getHttpServer())
+        .get('/users')
+        .set('Authorization', `Bearer ${tokenCliente}`)
+        .expect(403);
+
+      // 6. GET /users con token ADMIN → 200
+      const adminRes = await request(app.getHttpServer())
+        .get('/users')
+        .set('Authorization', `Bearer ${tokenAdmin}`)
+        .expect(200);
+
+      const users: Record<string, unknown>[] = adminRes.body;
+
+      if (!Array.isArray(users)) {
+        throw new Error('La respuesta debe ser un arreglo');
+      }
+
+      const emails = users.map((u) => u['email']);
+      if (!emails.includes(emailCliente)) {
+        throw new Error('El arreglo debe incluir el correo del CLIENTE');
+      }
+      if (!emails.includes(emailAdmin)) {
+        throw new Error('El arreglo debe incluir el correo del ADMIN');
+      }
+
+      for (const u of users) {
+        if ('password' in u) {
+          throw new Error('Ningún usuario debe exponer la propiedad password');
+        }
+      }
+    } finally {
+      // Limpieza
+      await userRepo.delete({ email: emailCliente });
+      await userRepo.delete({ email: emailAdmin });
     }
   });
 
