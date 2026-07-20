@@ -2,13 +2,16 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { DataSource } from 'typeorm';
 import { AppModule } from './../src/app.module';
+import { User } from './../src/users/user.entity';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
+  let moduleFixture: TestingModule;
 
   beforeEach(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
+    moduleFixture = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
 
@@ -56,6 +59,68 @@ describe('AppController (e2e)', () => {
           throw new Error('Expected timestamp to be a valid date');
         }
       });
+  });
+
+  it('flujo de autenticación (e2e)', async () => {
+    const email = `e2e.usuario.${Date.now()}@perriturno.test`;
+    const password = 'Prueba123*';
+    const dataSource = moduleFixture.get<DataSource>(DataSource);
+
+    try {
+      // 1. Registro
+      const registerRes = await request(app.getHttpServer())
+        .post('/users/register')
+        .send({ name: 'Usuario E2E', phone: '3001234567', email, password })
+        .expect(201);
+
+      if (registerRes.body.email !== email) {
+        throw new Error('El correo registrado no coincide');
+      }
+      if (registerRes.body.role !== 'CLIENTE') {
+        throw new Error('El rol esperado es CLIENTE');
+      }
+      if ('password' in registerRes.body) {
+        throw new Error('La respuesta no debe incluir password');
+      }
+
+      // 2. Login con contraseña incorrecta → 401
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password: 'wrongpassword' })
+        .expect(401);
+
+      // 3. Login con credenciales correctas → 201 y access_token
+      const loginRes = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email, password })
+        .expect(201);
+
+      const accessToken: string = loginRes.body.access_token;
+      if (typeof accessToken !== 'string' || accessToken.length === 0) {
+        throw new Error('access_token debe ser un string no vacío');
+      }
+
+      // 4. GET /users/profile sin token → 401
+      await request(app.getHttpServer())
+        .get('/users/profile')
+        .expect(401);
+
+      // 5. GET /users/profile con token → 200
+      const profileRes = await request(app.getHttpServer())
+        .get('/users/profile')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      if (profileRes.body.email !== email) {
+        throw new Error('El correo del perfil no coincide');
+      }
+      if ('password' in profileRes.body) {
+        throw new Error('El perfil no debe incluir password');
+      }
+    } finally {
+      // Limpieza: eliminar el usuario creado
+      await dataSource.getRepository(User).delete({ email });
+    }
   });
 
   afterEach(async () => {
