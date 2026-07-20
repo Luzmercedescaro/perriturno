@@ -13,7 +13,9 @@ import { ServicesService } from '../services/services.service';
 import { User, UserRole } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
+import { QueryAgendaDto } from './dto/query-agenda.dto';
 import { Reservation, ReservationStatus } from './reservation.entity';
+import { ReservationStatusHistory } from './reservation-status-history.entity';
 
 @Injectable()
 export class ReservationsService {
@@ -25,6 +27,8 @@ export class ReservationsService {
   constructor(
     @InjectRepository(Reservation)
     private readonly reservationRepository: Repository<Reservation>,
+    @InjectRepository(ReservationStatusHistory)
+    private readonly historyRepository: Repository<ReservationStatusHistory>,
     private readonly petsService: PetsService,
     private readonly servicesService: ServicesService,
     private readonly usersService: UsersService,
@@ -163,12 +167,210 @@ export class ReservationsService {
 
     return reservations.map((reservation) => this.removePasswordFromReservation(reservation));
   }
+async findAgenda(query: QueryAgendaDto) {
+  const where: any = {};
 
-  async cancel(id: string, actorId: string, actorRole: UserRole) {
+  if (query.scheduleDate?.trim()) {
+    where.scheduleDate = query.scheduleDate.trim();
+  }
+
+  if (query.status?.trim()) {
+    const status = query.status.trim().toUpperCase() as ReservationStatus;
+
+    if (!Object.values(ReservationStatus).includes(status)) {
+      throw new BadRequestException(
+        'El estado debe ser PENDIENTE, CONFIRMADA, FINALIZADA o CANCELADA.',
+      );
+    }
+
+    where.status = status;
+  }
+
+  if (query.serviceId?.trim()) {
+    where.service = { id: query.serviceId.trim() };
+  }
+
+  const reservations = await this.reservationRepository.find({
+    where,
+    relations: {
+      client: true,
+      pet: true,
+      service: true,
+      schedule: true,
+    },
+    order: {
+      scheduleDate: 'ASC',
+      startTime: 'ASC',
+    },
+  });
+
+  return reservations.map((reservation) =>
+    this.removePasswordFromReservation(reservation),
+  );
+}
+  async findHistory(id: string) {
+    const history = await this.historyRepository.find({
+      where: { reservation: { id } },
+      relations: { changedBy: true },
+      order: { changedAt: 'ASC' },
+    });
+
+    return history.map((item) => {
+      if (!item.changedBy) {
+        return item;
+      }
+
+      const { password: _password, ...safeChangedBy } = item.changedBy as User;
+      return {
+        ...item,
+        changedBy: safeChangedBy as User,
+      };
+    });
+  }
+  async confirm(id: string, actorId: string, actorRole: UserRole) {
+  if (actorRole !== UserRole.ADMIN) {
+    throw new ForbiddenException('Solo un administrador puede confirmar reservas.');
+  }
+
+  return this.reservationRepository.manager.transaction(
+    'SERIALIZABLE',
+    async (manager) => {
+      const reservationRepo = manager.getRepository(Reservation);
+      const historyRepo = manager.getRepository(ReservationStatusHistory);
+
+      const reservation = await reservationRepo
+        .createQueryBuilder('reservation')
+        .innerJoinAndSelect('reservation.client', 'client')
+        .innerJoinAndSelect('reservation.schedule', 'schedule')
+        .setLock('pessimistic_write')
+        .where('reservation.id = :id', { id })
+        .getOne();
+
+      if (!reservation) {
+        throw new NotFoundException('Reserva no encontrada.');
+      }
+
+      if (reservation.status !== ReservationStatus.PENDIENTE) {
+        throw new BadRequestException(
+          'Solo una reserva PENDIENTE puede ser confirmada.',
+        );
+      }
+
+      const startMinutes = this.toMinutes(reservation.startTime);
+      const endMinutes = this.toMinutes(reservation.endTime);
+
+      if (startMinutes === null || endMinutes === null) {
+        throw new BadRequestException('El horario de la reserva es inválido.');
+      }
+
+      const activeReservations = await reservationRepo.find({
+        where: {
+          scheduleDate: reservation.scheduleDate,
+          status: In([
+            ReservationStatus.PENDIENTE,
+            ReservationStatus.CONFIRMADA,
+          ]),
+        },
+      });
+
+      const hasConflict = activeReservations.some((item) => {
+        if (item.id === reservation.id) {
+          return false;
+        }
+
+        const itemStart = this.toMinutes(item.startTime);
+        const itemEnd = this.toMinutes(item.endTime);
+
+        if (itemStart === null || itemEnd === null) {
+          return false;
+        }
+
+        return this.hasOverlap(
+          startMinutes,
+          endMinutes,
+          itemStart,
+          itemEnd,
+        );
+      });
+
+      if (hasConflict) {
+        throw new BadRequestException(
+          'La reserva se cruza con otra reserva activa.',
+        );
+      }
+
+      const previousStatus = reservation.status;
+      reservation.status = ReservationStatus.CONFIRMADA;
+
+      const saved = await reservationRepo.save(reservation);
+
+      const history = historyRepo.create({
+        reservation: saved,
+        previousStatus,
+        newStatus: ReservationStatus.CONFIRMADA,
+        changedBy: { id: actorId } as User,
+      });
+
+      await historyRepo.save(history);
+
+      return this.removePasswordFromReservation(saved);
+    },
+  );
+}
+  async finalize(id: string, actorId: string, actorRole: UserRole) {
+  if (actorRole !== UserRole.ADMIN) {
+    throw new ForbiddenException(
+      'Solo un administrador puede finalizar reservas.',
+    );
+  }
+
+  return this.reservationRepository.manager.transaction(
+    'SERIALIZABLE',
+    async (manager) => {
+      const reservationRepo = manager.getRepository(Reservation);
+      const historyRepo = manager.getRepository(ReservationStatusHistory);
+
+      const reservation = await reservationRepo
+        .createQueryBuilder('reservation')
+        .innerJoinAndSelect('reservation.client', 'client')
+        .innerJoinAndSelect('reservation.schedule', 'schedule')
+        .setLock('pessimistic_write')
+        .where('reservation.id = :id', { id })
+        .getOne();
+
+      if (!reservation) {
+        throw new NotFoundException('Reserva no encontrada.');
+      }
+
+      if (reservation.status !== ReservationStatus.CONFIRMADA) {
+        throw new BadRequestException(
+          'Solo una reserva CONFIRMADA puede ser finalizada.',
+        );
+      }
+
+      const previousStatus = reservation.status;
+      reservation.status = ReservationStatus.FINALIZADA;
+
+      const saved = await reservationRepo.save(reservation);
+
+      const history = historyRepo.create({
+        reservation: saved,
+        previousStatus,
+        newStatus: ReservationStatus.FINALIZADA,
+        changedBy: { id: actorId } as User,
+      });
+
+      await historyRepo.save(history);
+
+      return this.removePasswordFromReservation(saved);
+    },
+  );
+}
+async cancel(id: string, actorId: string, actorRole: UserRole) {
     return this.reservationRepository.manager.transaction('SERIALIZABLE', async (manager) => {
       const reservationRepo = manager.getRepository(Reservation);
       const scheduleRepo = manager.getRepository(Schedule);
-
+      const historyRepo = manager.getRepository(ReservationStatusHistory);
       const reservation = await reservationRepo
         .createQueryBuilder('reservation')
         .innerJoinAndSelect('reservation.client', 'client')
@@ -192,10 +394,17 @@ export class ReservationsService {
       if (reservation.status === ReservationStatus.CANCELADA) {
         throw new BadRequestException('La reserva ya está cancelada.');
       }
-
+      const previousStatus = reservation.status;
       reservation.status = ReservationStatus.CANCELADA;
       const saved = await reservationRepo.save(reservation);
+      const history = historyRepo.create({
+        reservation: saved,
+        previousStatus,
+        newStatus: ReservationStatus.CANCELADA,
+        changedBy: { id: actorId } as User,
+  });
 
+      await historyRepo.save(history);
       const activeCount = await reservationRepo.count({
         where: {
           schedule: { id: reservation.schedule.id },

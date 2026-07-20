@@ -14,6 +14,7 @@ import { Schedule } from '../schedules/schedule.entity';
 export enum ReservationStatus {
   PENDIENTE = 'PENDIENTE',
   CONFIRMADA = 'CONFIRMADA',
+  FINALIZADA = 'FINALIZADA',
   CANCELADA = 'CANCELADA',
 }
 

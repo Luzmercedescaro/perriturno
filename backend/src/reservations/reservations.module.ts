@@ -4,12 +4,13 @@ import { PetsModule } from '../pets/pets.module';
 import { ServicesModule } from '../services/services.module';
 import { UsersModule } from '../users/users.module';
 import { Reservation } from './reservation.entity';
+import { ReservationStatusHistory } from './reservation-status-history.entity';
 import { ReservationsController } from './reservations.controller';
 import { ReservationsService } from './reservations.service';
 
 @Module({
 	imports: [
-		TypeOrmModule.forFeature([Reservation]),
+		TypeOrmModule.forFeature([Reservation, ReservationStatusHistory]),
 		PetsModule,
 		ServicesModule,
 		UsersModule,

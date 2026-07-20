@@ -1,7 +1,8 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+;import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PetSize, Schedule, ScheduleStatus } from '../schedules/schedule.entity';
 import { UserRole } from '../users/user.entity';
 import { CreateReservationDto } from './dto/create-reservation.dto';
+import { ReservationStatusHistory } from './reservation-status-history.entity';
 import { Reservation, ReservationStatus } from './reservation.entity';
 import { ReservationsService } from './reservations.service';
 
@@ -9,10 +10,11 @@ describe('ReservationsService', () => {
   let service: ReservationsService;
 
   let reservationRepository: any;
+  let historyRepository: any;
   let manager: any;
   let txReservationRepository: any;
   let txScheduleRepository: any;
-
+  let txHistoryRepository: any;
   let petsService: { findOneByOwner: jest.Mock };
   let servicesService: { findActiveById: jest.Mock };
   let usersService: { findById: jest.Mock };
@@ -43,7 +45,15 @@ describe('ReservationsService', () => {
       save: jest.fn(),
       createQueryBuilder: jest.fn(),
     };
-
+    txHistoryRepository = {
+      create: jest.fn((value) => value),
+      save: jest.fn(),
+    };
+    historyRepository = {
+      create: jest.fn((value) => value),
+      save: jest.fn(),
+      find: jest.fn(),
+    };
     manager = {
       getRepository: jest.fn((entity) => {
         if (entity === Reservation) {
@@ -51,6 +61,9 @@ describe('ReservationsService', () => {
         }
         if (entity === Schedule) {
           return txScheduleRepository;
+        }
+        if (entity === ReservationStatusHistory) {
+          return txHistoryRepository;
         }
         return null;
       }),
@@ -79,6 +92,7 @@ describe('ReservationsService', () => {
 
     service = new ReservationsService(
       reservationRepository,
+      historyRepository,
       petsService as any,
       servicesService as any,
       usersService as any,
@@ -461,4 +475,198 @@ describe('ReservationsService', () => {
     );
     expect(result[0].client).not.toHaveProperty('password');
   });
+it('confirma una reserva PENDIENTE y registra el historial', async () => {
+  const confirmQb = createCancelReservationQueryBuilder();
+
+  confirmQb.getOne.mockResolvedValue({
+    id: 'res-14',
+    status: ReservationStatus.PENDIENTE,
+    client: { id: 'client-1', password: 'hash' },
+    schedule: { id: 'schedule-14' },
+    scheduleDate: '2026-07-21',
+    startTime: '09:00',
+    endTime: '11:00',
+  });
+
+  txReservationRepository.createQueryBuilder.mockReturnValue(confirmQb);
+  txReservationRepository.find.mockResolvedValue([]);
+  txReservationRepository.save.mockImplementation(async (value) => value);
+  txHistoryRepository.save.mockImplementation(async (value) => value);
+
+  const result = await service.confirm(
+    'res-14',
+    'admin-1',
+    UserRole.ADMIN,
+  );
+
+  expect(result.status).toBe(ReservationStatus.CONFIRMADA);
+  expect(txHistoryRepository.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      previousStatus: ReservationStatus.PENDIENTE,
+      newStatus: ReservationStatus.CONFIRMADA,
+      changedBy: { id: 'admin-1' },
+    }),
+  );
+  expect(txHistoryRepository.save).toHaveBeenCalled();
+});
+it('finaliza una reserva CONFIRMADA y registra el historial', async () => {
+  const finalizeQb = createCancelReservationQueryBuilder();
+
+  finalizeQb.getOne.mockResolvedValue({
+    id: 'res-15',
+    status: ReservationStatus.CONFIRMADA,
+    client: { id: 'client-1', password: 'hash' },
+    schedule: { id: 'schedule-15' },
+  });
+
+  txReservationRepository.createQueryBuilder.mockReturnValue(finalizeQb);
+  txReservationRepository.save.mockImplementation(async (value) => value);
+  txHistoryRepository.save.mockImplementation(async (value) => value);
+
+  const result = await service.finalize(
+    'res-15',
+    'admin-1',
+    UserRole.ADMIN,
+  );
+
+  expect(result.status).toBe(ReservationStatus.FINALIZADA);
+  expect(txHistoryRepository.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      previousStatus: ReservationStatus.CONFIRMADA,
+      newStatus: ReservationStatus.FINALIZADA,
+      changedBy: { id: 'admin-1' },
+    }),
+  );
+  expect(txHistoryRepository.save).toHaveBeenCalled();
+});
+it('registra el historial al cancelar una reserva activa', async () => {
+  const cancelQb = createCancelReservationQueryBuilder();
+
+  cancelQb.getOne.mockResolvedValue({
+    id: 'res-16',
+    status: ReservationStatus.CONFIRMADA,
+    client: { id: 'client-1', password: 'hash' },
+    schedule: { id: 'schedule-16' },
+  });
+
+  txReservationRepository.createQueryBuilder.mockReturnValue(cancelQb);
+  txReservationRepository.save.mockImplementation(async (value) => value);
+  txReservationRepository.count.mockResolvedValue(1);
+  txHistoryRepository.save.mockImplementation(async (value) => value);
+
+  const result = await service.cancel(
+    'res-16',
+    'admin-1',
+    UserRole.ADMIN,
+  );
+
+  expect(result.status).toBe(ReservationStatus.CANCELADA);
+  expect(txHistoryRepository.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      previousStatus: ReservationStatus.CONFIRMADA,
+      newStatus: ReservationStatus.CANCELADA,
+      changedBy: { id: 'admin-1' },
+    }),
+  );
+  expect(txHistoryRepository.save).toHaveBeenCalled();
+});
+it('filtra la agenda por fecha, estado y servicio', async () => {
+  reservationRepository.find.mockResolvedValue([]);
+
+  await service.findAgenda({
+    scheduleDate: '2026-07-21',
+    status: 'CONFIRMADA',
+    serviceId: 'service-1',
+  });
+
+  expect(reservationRepository.find).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: {
+        scheduleDate: '2026-07-21',
+        status: ReservationStatus.CONFIRMADA,
+        service: { id: 'service-1' },
+      },
+    }),
+  );
+});
+it('consulta el historial de cambios de una reserva', async () => {
+  historyRepository.find.mockResolvedValue([]);
+
+  await service.findHistory('res-17');
+
+  expect(historyRepository.find).toHaveBeenCalledWith({
+    where: { reservation: { id: 'res-17' } },
+    relations: { changedBy: true },
+    order: { changedAt: 'ASC' },
+  });
+});
+it('rechaza que un CLIENTE confirme una reserva', async () => {
+  await expect(
+    service.confirm('res-18', 'client-1', UserRole.CLIENTE),
+  ).rejects.toThrow(ForbiddenException);
+});
+
+it('rechaza confirmar una reserva CANCELADA', async () => {
+  const confirmQb = createCancelReservationQueryBuilder();
+
+  confirmQb.getOne.mockResolvedValue({
+    id: 'res-19',
+    status: ReservationStatus.CANCELADA,
+    client: { id: 'client-1', password: 'hash' },
+    schedule: { id: 'schedule-19' },
+  });
+
+  txReservationRepository.createQueryBuilder.mockReturnValue(confirmQb);
+
+  await expect(
+    service.confirm('res-19', 'admin-1', UserRole.ADMIN),
+  ).rejects.toThrow(BadRequestException);
+});
+
+it('rechaza que un CLIENTE finalice una reserva', async () => {
+  await expect(
+    service.finalize('res-20', 'client-1', UserRole.CLIENTE),
+  ).rejects.toThrow(ForbiddenException);
+});
+
+it('rechaza finalizar una reserva PENDIENTE', async () => {
+  const finalizeQb = createCancelReservationQueryBuilder();
+
+  finalizeQb.getOne.mockResolvedValue({
+    id: 'res-21',
+    status: ReservationStatus.PENDIENTE,
+    client: { id: 'client-1', password: 'hash' },
+    schedule: { id: 'schedule-21' },
+  });
+
+  txReservationRepository.createQueryBuilder.mockReturnValue(finalizeQb);
+
+  await expect(
+    service.finalize('res-21', 'admin-1', UserRole.ADMIN),
+  ).rejects.toThrow(BadRequestException);
+});
+it('findHistory elimina la contraseña del usuario que cambió el estado', async () => {
+  historyRepository.find.mockResolvedValue([
+    {
+      id: 'hist-1',
+      previousStatus: ReservationStatus.PENDIENTE,
+      newStatus: ReservationStatus.CONFIRMADA,
+      changedBy: {
+        id: 'admin-22',
+        name: 'Admin Uno',
+        password: 'hash-secreto',
+      },
+    },
+  ]);
+
+  const result = await service.findHistory('res-22');
+
+  expect(result[0].changedBy).toEqual(
+    expect.objectContaining({
+      id: 'admin-22',
+      name: 'Admin Uno',
+    }),
+  );
+  expect(result[0].changedBy).not.toHaveProperty('password');
+});
 });
