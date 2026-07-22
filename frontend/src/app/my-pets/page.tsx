@@ -1,28 +1,150 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+
+type Pet = {
+	id: string;
+	name: string;
+	type: string;
+	size: string;
+	observations: string | null;
+};
 
 export default function MyPetsPage() {
+	const router = useRouter();
 	const [name, setName] = useState('');
 	const [type, setType] = useState('');
 	const [size, setSize] = useState('');
 	const [observations, setObservations] = useState('');
 	const [message, setMessage] = useState('');
+	const [pets, setPets] = useState<Pet[]>([]);
+	const [isLoadingPets, setIsLoadingPets] = useState(true);
+	const [isSubmitting, setIsSubmitting] = useState(false);
 
-	const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+	const handleUnauthorized = () => {
+		localStorage.removeItem('perriturno_token');
+		router.push('/login');
+	};
+
+	const fetchPets = async (token: string) => {
+		setIsLoadingPets(true);
+
+		try {
+			const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/pets`, {
+				method: 'GET',
+				headers: {
+					Authorization: `Bearer ${token}`,
+				},
+			});
+
+			if (response.status === 401 || response.status === 403) {
+				handleUnauthorized();
+				return;
+			}
+
+			if (!response.ok) {
+				setMessage('No fue posible cargar tus mascotas.');
+				return;
+			}
+
+			const data = (await response.json()) as Pet[];
+			setPets(Array.isArray(data) ? data : []);
+		} catch {
+			setMessage('No fue posible conectar con el servidor.');
+		} finally {
+			setIsLoadingPets(false);
+		}
+	};
+
+	useEffect(() => {
+		const token = localStorage.getItem('perriturno_token');
+
+		if (!token) {
+			router.push('/login');
+			return;
+		}
+
+		fetchPets(token);
+	}, [router]);
+
+	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
+
+		if (isSubmitting) {
+			return;
+		}
 
 		if (!name || !type || !size) {
 			setMessage('Completa los datos obligatorios de la mascota.');
 			return;
 		}
 
-		setMessage('Mascota lista para guardarse en Perriturno.');
-		setName('');
-		setType('');
-		setSize('');
-		setObservations('');
+		const token = localStorage.getItem('perriturno_token');
+
+		if (!token) {
+			router.push('/login');
+			return;
+		}
+
+		setIsSubmitting(true);
+		setMessage('');
+
+		try {
+			const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/pets`, {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${token}`,
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					name,
+					type,
+					size,
+					observations,
+				}),
+			});
+
+			if (response.status === 401 || response.status === 403) {
+				handleUnauthorized();
+				return;
+			}
+
+			if (!response.ok) {
+				let backendMessage = 'No fue posible registrar la mascota.';
+
+				try {
+					const errorData = (await response.json()) as { message?: string | string[] };
+					if (Array.isArray(errorData.message)) {
+						backendMessage = errorData.message.join(' ');
+					} else if (typeof errorData.message === 'string' && errorData.message.trim()) {
+						backendMessage = errorData.message;
+					}
+				} catch {
+					backendMessage = 'No fue posible registrar la mascota.';
+				}
+
+				setMessage(backendMessage);
+				return;
+			}
+
+			setMessage('Mascota registrada correctamente.');
+			setName('');
+			setType('');
+			setSize('');
+			setObservations('');
+			await fetchPets(token);
+		} catch {
+			setMessage('No fue posible conectar con el servidor.');
+		} finally {
+			setIsSubmitting(false);
+		}
+	};
+
+	const handleLogout = () => {
+		localStorage.removeItem('perriturno_token');
+		router.push('/login');
 	};
 
 	return (
@@ -43,9 +165,13 @@ export default function MyPetsPage() {
 						<Link href="/dashboard" className="rounded-full px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-teal-50 hover:text-teal-700">
 							Panel principal
 						</Link>
-						<Link href="/login" className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-rose-600">
+						<button
+							type="button"
+							onClick={handleLogout}
+							className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-rose-600"
+						>
 							Cerrar sesión
-						</Link>
+						</button>
 					</nav>
 				</div>
 			</header>
@@ -66,43 +192,57 @@ export default function MyPetsPage() {
 								</p>
 
 								<div className="mt-8 inline-flex rounded-2xl border border-teal-100 bg-teal-50/80 px-5 py-4 shadow-sm">
-									<span className="text-sm font-medium text-teal-700">Mascotas registradas: 1</span>
+									<span className="text-sm font-medium text-teal-700">Mascotas registradas: {pets.length}</span>
 								</div>
 
-								<div className="mt-8 rounded-3xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8">
-									<div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-										<div>
-											<p className="text-sm font-semibold uppercase tracking-[0.22em] text-rose-400">Mascota registrada</p>
-											<h3 className="mt-2 text-2xl font-bold text-gray-900">Luna</h3>
+								<div className="mt-8 space-y-5">
+									{isLoadingPets ? (
+										<div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8">
+											<p className="text-base font-medium text-gray-700">Cargando tus mascotas...</p>
 										</div>
-										<span className="inline-flex w-fit rounded-full bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-700">
-											Activa
-										</span>
-									</div>
+									) : pets.length === 0 ? (
+										<div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8">
+											<p className="text-base font-medium text-gray-700">Aún no tienes mascotas registradas.</p>
+										</div>
+									) : (
+										pets.map((pet) => (
+											<div key={pet.id} className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8">
+												<div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+													<div>
+														<p className="text-sm font-semibold uppercase tracking-[0.22em] text-rose-400">Mascota registrada</p>
+														<h3 className="mt-2 text-2xl font-bold text-gray-900">{pet.name}</h3>
+													</div>
+													<span className="inline-flex w-fit rounded-full bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-700">
+														Activa
+													</span>
+												</div>
 
-									<div className="mt-6 grid gap-4 text-sm text-gray-700 sm:grid-cols-2">
-										<div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-											<p className="text-gray-500">Tipo</p>
-											<p className="mt-1 text-base font-semibold text-gray-900">Perro</p>
-										</div>
-										<div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-											<p className="text-gray-500">Tamaño</p>
-											<p className="mt-1 text-base font-semibold text-gray-900">Pequeña</p>
-										</div>
-										<div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 sm:col-span-2">
-											<p className="text-gray-500">Observaciones</p>
-											<p className="mt-1 text-base font-semibold text-gray-900">Sin observaciones especiales</p>
-										</div>
-									</div>
+												<div className="mt-6 grid gap-4 text-sm text-gray-700 sm:grid-cols-2">
+													<div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+														<p className="text-gray-500">Tipo</p>
+														<p className="mt-1 text-base font-semibold text-gray-900">{pet.type}</p>
+													</div>
+													<div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+														<p className="text-gray-500">Tamaño</p>
+														<p className="mt-1 text-base font-semibold text-gray-900">{pet.size}</p>
+													</div>
+													<div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 sm:col-span-2">
+														<p className="text-gray-500">Observaciones</p>
+														<p className="mt-1 text-base font-semibold text-gray-900">{pet.observations?.trim() || 'Sin observaciones especiales'}</p>
+													</div>
+												</div>
 
-									<div className="mt-6">
-										<button
-											type="button"
-											className="inline-flex rounded-xl bg-rose-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-rose-600 focus:outline-none focus:ring-4 focus:ring-rose-200"
-										>
-											Editar información
-										</button>
-									</div>
+												<div className="mt-6">
+													<button
+														type="button"
+														className="inline-flex rounded-xl bg-rose-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-rose-600 focus:outline-none focus:ring-4 focus:ring-rose-200"
+													>
+														Editar información
+													</button>
+												</div>
+											</div>
+										))
+									)}
 								</div>
 
 								<div className="mt-8 rounded-3xl border border-teal-100 bg-gradient-to-br from-teal-50 to-white p-6 shadow-sm">
@@ -185,9 +325,10 @@ export default function MyPetsPage() {
 
 									<button
 										type="submit"
-										className="w-full rounded-xl bg-teal-600 px-4 py-3.5 font-semibold text-white transition-colors hover:bg-teal-700 focus:outline-none focus:ring-4 focus:ring-teal-200"
+										disabled={isSubmitting}
+										className="w-full rounded-xl bg-teal-600 px-4 py-3.5 font-semibold text-white transition-colors hover:bg-teal-700 focus:outline-none focus:ring-4 focus:ring-teal-200 disabled:cursor-not-allowed disabled:opacity-70"
 									>
-										Guardar mascota
+										{isSubmitting ? 'Guardando mascota...' : 'Guardar mascota'}
 									</button>
 
 									{message && (

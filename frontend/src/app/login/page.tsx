@@ -2,21 +2,87 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 export default function Login() {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+
+    if (isLoading) {
+      return;
+    }
 
     if (!email || !password) {
       setMessage('Completa el correo y la contraseña.');
       return;
     }
 
-    setMessage('Formulario listo para conectarse con Perriturno.');
+    setIsLoading(true);
+    setMessage('');
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+      if (!apiUrl) {
+        setMessage('No fue posible conectar con el servidor.');
+        return;
+      }
+
+      const response = await fetch(`${apiUrl}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          setMessage('Correo o contraseña incorrectos.');
+          return;
+        }
+
+        let backendMessage = 'No fue posible iniciar sesión.';
+
+        try {
+          const errorData = (await response.json()) as { message?: string | string[] };
+          if (Array.isArray(errorData.message)) {
+            backendMessage = errorData.message.join(' ');
+          } else if (typeof errorData.message === 'string' && errorData.message.trim()) {
+            backendMessage = errorData.message;
+          }
+        } catch {
+          backendMessage = 'No fue posible iniciar sesión.';
+        }
+
+        setMessage(backendMessage);
+        return;
+      }
+
+      const data = (await response.json()) as { access_token?: string };
+
+      if (!data.access_token) {
+        setMessage('No fue posible iniciar sesión.');
+        return;
+      }
+
+      localStorage.setItem('perriturno_token', data.access_token);
+      router.push('/dashboard');
+    } catch {
+      setMessage('No fue posible conectar con el servidor.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -127,9 +193,10 @@ export default function Login() {
                 {/* Submit Button */}
                 <button
                   type="submit"
+                  disabled={isLoading}
                   className="w-full bg-rose-500 hover:bg-rose-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2"
                 >
-                  Ingresar
+                  {isLoading ? 'Ingresando...' : 'Ingresar'}
                 </button>
               </form>
 

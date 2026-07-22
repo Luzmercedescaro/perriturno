@@ -18,6 +18,11 @@ async function bootstrap() {
 
   const port = process.env.PORT ?? 3000;
 
+  app.enableCors({
+    origin: 'http://localhost:3000',
+    credentials: true,
+  });
+
   await app.listen(port);
   console.log(`Perriturno backend running on port ${port}`);
 }

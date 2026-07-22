@@ -10,9 +10,13 @@ export default function Register() {
 	const [password, setPassword] = useState('');
 	const [confirmPassword, setConfirmPassword] = useState('');
 	const [message, setMessage] = useState('');
+	const [isLoading, setIsLoading] = useState(false);
 
-	const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
+		if (isLoading) {
+			return;
+		}
 
 		if (!fullName || !phone || !email || !password || !confirmPassword) {
 			setMessage('Completa todos los campos.');
@@ -24,7 +28,66 @@ export default function Register() {
 			return;
 		}
 
-		setMessage('Formulario listo para registrar tu cuenta en Perriturno.');
+		setIsLoading(true);
+		setMessage('');
+
+		try {
+			const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+			if (!apiUrl) {
+				setMessage('No fue posible conectar con el servidor.');
+				return;
+			}
+
+			const response = await fetch(`${apiUrl}/users/register`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				credentials: 'include',
+				body: JSON.stringify({
+					name: fullName,
+					phone,
+					email,
+					password,
+				}),
+			});
+
+			if (!response.ok) {
+				let errorMessage = 'No fue posible completar el registro.';
+
+				try {
+					const errorData = (await response.json()) as { message?: string | string[] };
+					const backendMessage = Array.isArray(errorData.message)
+						? errorData.message.join(' ')
+						: errorData.message;
+
+					if (response.status === 409 || (backendMessage && /correo|email|already|existe|registrado/i.test(backendMessage))) {
+						errorMessage = 'Este correo ya está registrado.';
+					} else if (backendMessage) {
+						errorMessage = backendMessage;
+					}
+				} catch {
+					if (response.status === 409) {
+						errorMessage = 'Este correo ya está registrado.';
+					}
+				}
+
+				setMessage(errorMessage);
+				return;
+			}
+
+			setMessage('Cuenta creada correctamente. Ya puedes iniciar sesión.');
+			setFullName('');
+			setPhone('');
+			setEmail('');
+			setPassword('');
+			setConfirmPassword('');
+		} catch {
+			setMessage('No fue posible conectar con el servidor.');
+		} finally {
+			setIsLoading(false);
+		}
 	};
 
 	return (
@@ -194,9 +257,10 @@ export default function Register() {
 
 									<button
 										type="submit"
-										className="w-full rounded-xl bg-rose-500 px-4 py-3.5 font-semibold text-white transition-colors hover:bg-rose-600 focus:outline-none focus:ring-4 focus:ring-rose-200"
+										disabled={isLoading}
+										className="w-full rounded-xl bg-rose-500 px-4 py-3.5 font-semibold text-white transition-colors hover:bg-rose-600 focus:outline-none focus:ring-4 focus:ring-rose-200 disabled:cursor-not-allowed disabled:opacity-70"
 									>
-										Crear cuenta
+										{isLoading ? 'Creando cuenta...' : 'Crear cuenta'}
 									</button>
 								</form>
 

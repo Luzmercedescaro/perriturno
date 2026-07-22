@@ -1,6 +1,59 @@
+"use client";
+
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 export default function Dashboard() {
+	const router = useRouter();
+	const [userName, setUserName] = useState('');
+	const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+
+	useEffect(() => {
+		const token = localStorage.getItem('perriturno_token');
+
+		if (!token) {
+			router.push('/login');
+			return;
+		}
+
+		const loadProfile = async () => {
+			try {
+				const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/users/profile`, {
+					method: 'GET',
+					headers: {
+						Authorization: `Bearer ${token}`,
+					},
+				});
+
+				if (response.status === 401 || response.status === 403) {
+					localStorage.removeItem('perriturno_token');
+					router.push('/login');
+					return;
+				}
+
+				if (!response.ok) {
+					return;
+				}
+
+				const data = (await response.json()) as { name?: string };
+				setUserName(data.name?.trim() || 'Usuario');
+			} catch {
+				localStorage.removeItem('perriturno_token');
+				router.push('/login');
+			} finally {
+				setIsLoadingProfile(false);
+			}
+		};
+
+		loadProfile();
+	}, [router]);
+
+	const handleLogout = () => {
+		localStorage.removeItem('perriturno_token');
+		router.push('/login');
+	};
+
 	return (
 		<div className="flex min-h-screen flex-col bg-gradient-to-br from-teal-50 via-white to-rose-50">
 			<header className="border-b border-teal-100/80 bg-white/80 backdrop-blur-sm">
@@ -19,9 +72,13 @@ export default function Dashboard() {
 						<Link href="/" className="rounded-full px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-teal-50 hover:text-teal-700">
 							Inicio
 						</Link>
-						<Link href="/login" className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-rose-600">
+						<button
+							type="button"
+							onClick={handleLogout}
+							className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-rose-600"
+						>
 							Cerrar sesión
-						</Link>
+						</button>
 					</nav>
 				</div>
 			</header>
@@ -35,7 +92,7 @@ export default function Dashboard() {
 									Panel principal
 								</p>
 								<h2 className="mt-5 text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl lg:text-5xl">
-									Hola, Mercedes
+									{isLoadingProfile ? 'Cargando tu información...' : `Hola, ${userName}`}
 								</h2>
 								<p className="mt-4 max-w-2xl text-base leading-7 text-gray-600 sm:text-lg">
 									Aquí puedes revisar y organizar el cuidado de tus mascotas.
