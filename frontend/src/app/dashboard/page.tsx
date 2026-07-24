@@ -4,55 +4,177 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
+type UserProfile = {
+	name?: string;
+};
+
+type Pet = {
+	id: string;
+	name: string;
+	type: string;
+	size: string;
+	observations?: string;
+};
+
+type Service = {
+	id: string;
+	name: string;
+	description?: string;
+	durationMinutes: number;
+	price: number;
+	active: boolean;
+};
+
+type Schedule = {
+	id: string;
+	scheduleDate: string;
+	startTime: string;
+	endTime: string;
+	petSize: string;
+	status: string;
+	serviceName?: string;
+};
+
+type Reservation = {
+	id: string;
+	pet: Pet;
+	service: Service;
+	schedule: Schedule;
+	scheduleDate: string;
+	startTime: string;
+	endTime: string;
+	status: string;
+	observations?: string;
+};
+
 export default function Dashboard() {
 	const router = useRouter();
 	const [userName, setUserName] = useState('');
-	const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+	const [pets, setPets] = useState<Pet[]>([]);
+	const [services, setServices] = useState<Service[]>([]);
+	const [reservations, setReservations] = useState<Reservation[]>([]);
+	const [isLoadingDashboard, setIsLoadingDashboard] = useState(true);
+	const [message, setMessage] = useState('');
+
+	const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+	const handleUnauthorized = () => {
+		localStorage.removeItem('perriturno_token');
+		router.push('/login');
+	};
+
+	const getToken = () => localStorage.getItem('perriturno_token');
+
+	const formatDate = (value: string) => {
+		const dateValue = new Date(`${value}T00:00:00`);
+		if (Number.isNaN(dateValue.getTime())) {
+			return value;
+		}
+
+		return new Intl.DateTimeFormat('es-CO', {
+			day: 'numeric',
+			month: 'long',
+			year: 'numeric',
+		}).format(dateValue);
+	};
+
+	const formatTime = (value: string) => value.slice(0, 5);
+
+	const formatPrice = (value: number) =>
+		new Intl.NumberFormat('es-CO', {
+			style: 'currency',
+			currency: 'COP',
+			maximumFractionDigits: 0,
+		}).format(value);
+
+	const fetchDashboardData = async (token: string) => {
+		if (!apiUrl) {
+			setMessage('No fue posible conectar con el servidor.');
+			setIsLoadingDashboard(false);
+			return;
+		}
+
+		setIsLoadingDashboard(true);
+		setMessage('');
+
+		try {
+			const [profileResponse, petsResponse, reservationsResponse, servicesResponse] = await Promise.all([
+				fetch(`${apiUrl}/users/profile`, {
+					method: 'GET',
+					headers: {
+						Authorization: `Bearer ${token}`,
+					},
+				}),
+				fetch(`${apiUrl}/pets`, {
+					method: 'GET',
+					headers: {
+						Authorization: `Bearer ${token}`,
+					},
+				}),
+				fetch(`${apiUrl}/reservations/me`, {
+					method: 'GET',
+					headers: {
+						Authorization: `Bearer ${token}`,
+					},
+				}),
+				fetch(`${apiUrl}/services`),
+			]);
+
+			if ([profileResponse, petsResponse, reservationsResponse, servicesResponse].some((response) => response.status === 401 || response.status === 403)) {
+				handleUnauthorized();
+				return;
+			}
+
+			if (!profileResponse.ok || !petsResponse.ok || !reservationsResponse.ok || !servicesResponse.ok) {
+				setMessage('No fue posible cargar la información del panel.');
+				return;
+			}
+
+			const profileData = (await profileResponse.json()) as UserProfile;
+			const petsData = (await petsResponse.json()) as Pet[];
+			const reservationsData = (await reservationsResponse.json()) as Reservation[];
+			const servicesData = (await servicesResponse.json()) as Service[];
+
+			setUserName(profileData.name?.trim() || 'Usuario');
+			setPets(Array.isArray(petsData) ? petsData : []);
+			setReservations(Array.isArray(reservationsData) ? reservationsData : []);
+			setServices(Array.isArray(servicesData) ? servicesData.filter((item) => item.active) : []);
+		} catch {
+			setMessage('No fue posible conectar con el servidor.');
+		} finally {
+			setIsLoadingDashboard(false);
+		}
+	};
 
 	useEffect(() => {
-		const token = localStorage.getItem('perriturno_token');
+		const token = getToken();
 
 		if (!token) {
 			router.push('/login');
 			return;
 		}
 
-		const loadProfile = async () => {
-			try {
-				const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/users/profile`, {
-					method: 'GET',
-					headers: {
-						Authorization: `Bearer ${token}`,
-					},
-				});
-
-				if (response.status === 401 || response.status === 403) {
-					localStorage.removeItem('perriturno_token');
-					router.push('/login');
-					return;
-				}
-
-				if (!response.ok) {
-					return;
-				}
-
-				const data = (await response.json()) as { name?: string };
-				setUserName(data.name?.trim() || 'Usuario');
-			} catch {
-				localStorage.removeItem('perriturno_token');
-				router.push('/login');
-			} finally {
-				setIsLoadingProfile(false);
-			}
-		};
-
-		loadProfile();
+		fetchDashboardData(token);
 	}, [router]);
 
 	const handleLogout = () => {
 		localStorage.removeItem('perriturno_token');
 		router.push('/login');
 	};
+
+	const activeReservations = reservations.filter(
+		(item) => item.status === 'PENDIENTE' || item.status === 'CONFIRMADA',
+	);
+
+	const nextReservation = [...activeReservations].sort((left, right) => {
+		const leftDateTime = new Date(`${left.scheduleDate}T${left.startTime}`);
+		const rightDateTime = new Date(`${right.scheduleDate}T${right.startTime}`);
+
+		return leftDateTime.getTime() - rightDateTime.getTime();
+	})[0];
+
+	const firstPet = pets[0];
+	const profileTitle = isLoadingDashboard ? 'Cargando tu información...' : `Hola, ${userName}`;
 
 	return (
 		<div className="flex min-h-screen flex-col bg-gradient-to-br from-teal-50 via-white to-rose-50">
@@ -92,24 +214,30 @@ export default function Dashboard() {
 									Panel principal
 								</p>
 								<h2 className="mt-5 text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl lg:text-5xl">
-									{isLoadingProfile ? 'Cargando tu información...' : `Hola, ${userName}`}
+									{profileTitle}
 								</h2>
 								<p className="mt-4 max-w-2xl text-base leading-7 text-gray-600 sm:text-lg">
 									Aquí puedes revisar y organizar el cuidado de tus mascotas.
 								</p>
 
+								{message ? (
+									<div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+										{message}
+									</div>
+								) : null}
+
 								<div className="mt-8 grid gap-4 sm:grid-cols-3">
 									<div className="rounded-2xl border border-teal-100 bg-teal-50/80 p-5 shadow-sm">
 										<p className="text-sm font-medium text-teal-700">Mascotas registradas</p>
-										<p className="mt-3 text-3xl font-bold text-gray-900">1</p>
+										<p className="mt-3 text-3xl font-bold text-gray-900">{isLoadingDashboard ? '...' : pets.length}</p>
 									</div>
 									<div className="rounded-2xl border border-rose-100 bg-rose-50/80 p-5 shadow-sm">
 										<p className="text-sm font-medium text-rose-700">Reservas activas</p>
-										<p className="mt-3 text-3xl font-bold text-gray-900">1</p>
+										<p className="mt-3 text-3xl font-bold text-gray-900">{isLoadingDashboard ? '...' : activeReservations.length}</p>
 									</div>
 									<div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
 										<p className="text-sm font-medium text-gray-600">Servicios disponibles</p>
-										<p className="mt-3 text-3xl font-bold text-gray-900">3</p>
+										<p className="mt-3 text-3xl font-bold text-gray-900">{isLoadingDashboard ? '...' : services.length}</p>
 									</div>
 								</div>
 							</div>
@@ -119,39 +247,55 @@ export default function Dashboard() {
 									<div className="flex items-start justify-between gap-4">
 										<div>
 											<p className="text-sm font-semibold uppercase tracking-[0.22em] text-rose-400">Próxima reserva</p>
-											<h3 className="mt-2 text-xl font-bold text-gray-900">Servicio agendado</h3>
+											<h3 className="mt-2 text-xl font-bold text-gray-900">
+												{isLoadingDashboard
+													? 'Cargando reserva...'
+													: nextReservation?.service.name || 'Sin reservas activas'}
+											</h3>
 										</div>
-										<span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-700">
-											Pendiente
-										</span>
+										{!isLoadingDashboard && nextReservation ? (
+											<span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-700">
+												{nextReservation.status}
+											</span>
+										) : null}
 									</div>
 
-									<div className="mt-5 space-y-3 text-sm text-gray-700">
-										<div className="flex items-center justify-between gap-4">
-											<span>Mascota</span>
-											<span className="font-semibold text-gray-900">Luna</span>
+									{isLoadingDashboard ? (
+										<div className="mt-5 space-y-3 text-sm text-gray-700">
+											<p className="font-medium text-gray-700">Cargando la próxima reserva...</p>
 										</div>
-										<div className="flex items-center justify-between gap-4">
-											<span>Servicio</span>
-											<span className="font-semibold text-gray-900">Baño y cuidado</span>
+									) : nextReservation ? (
+										<div className="mt-5 space-y-3 text-sm text-gray-700">
+											<div className="flex items-center justify-between gap-4">
+												<span>Mascota</span>
+												<span className="font-semibold text-gray-900">{nextReservation.pet.name}</span>
+											</div>
+											<div className="flex items-center justify-between gap-4">
+												<span>Servicio</span>
+												<span className="font-semibold text-gray-900">{nextReservation.service.name}</span>
+											</div>
+											<div className="flex items-center justify-between gap-4">
+												<span>Fecha</span>
+												<span className="font-semibold text-gray-900">{formatDate(nextReservation.scheduleDate)}</span>
+											</div>
+											<div className="flex items-center justify-between gap-4">
+												<span>Hora</span>
+												<span className="font-semibold text-gray-900">{formatTime(nextReservation.startTime)}</span>
+											</div>
+											<div className="flex items-center justify-between gap-4">
+												<span>Estado</span>
+												<span className="font-semibold text-rose-600">{nextReservation.status}</span>
+											</div>
+											<div className="flex items-center justify-between gap-4 border-t border-gray-100 pt-3">
+												<span>Precio</span>
+												<span className="font-bold text-teal-700">{formatPrice(nextReservation.service.price)}</span>
+											</div>
 										</div>
-										<div className="flex items-center justify-between gap-4">
-											<span>Fecha</span>
-											<span className="font-semibold text-gray-900">25 de julio de 2026</span>
+									) : (
+										<div className="mt-5 space-y-3 text-sm text-gray-700">
+											<p className="font-medium text-gray-700">No tienes reservas activas por ahora.</p>
 										</div>
-										<div className="flex items-center justify-between gap-4">
-											<span>Hora</span>
-											<span className="font-semibold text-gray-900">10:00 a. m.</span>
-										</div>
-										<div className="flex items-center justify-between gap-4">
-											<span>Estado</span>
-											<span className="font-semibold text-rose-600">Pendiente</span>
-										</div>
-										<div className="flex items-center justify-between gap-4 border-t border-gray-100 pt-3">
-											<span>Precio</span>
-											<span className="font-bold text-teal-700">$45.000</span>
-										</div>
-									</div>
+									)}
 								</div>
 							</div>
 						</div>
@@ -216,31 +360,47 @@ export default function Dashboard() {
 							<div className="flex items-center justify-between gap-4">
 								<div>
 									<p className="text-sm font-semibold uppercase tracking-[0.22em] text-rose-400">Mi mascota</p>
-									<h3 className="mt-2 text-2xl font-bold text-gray-900">Luna</h3>
+									<h3 className="mt-2 text-2xl font-bold text-gray-900">
+										{isLoadingDashboard ? 'Cargando mascota...' : firstPet?.name || 'Sin mascotas registradas'}
+									</h3>
 								</div>
-								<span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-700">
-									Perfil activo
-								</span>
+								{!isLoadingDashboard && firstPet ? (
+									<span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-700">
+										Perfil activo
+									</span>
+								) : null}
 							</div>
 
-							<div className="mt-6 space-y-4 text-sm text-gray-700">
-								<div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-3">
-									<span>Nombre</span>
-									<span className="font-semibold text-gray-900">Luna</span>
+							{isLoadingDashboard ? (
+								<div className="mt-6 space-y-4 text-sm text-gray-700">
+									<p className="font-medium text-gray-700">Cargando la información de tu mascota...</p>
 								</div>
-								<div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-3">
-									<span>Tipo</span>
-									<span className="font-semibold text-gray-900">Perro</span>
+							) : firstPet ? (
+								<div className="mt-6 space-y-4 text-sm text-gray-700">
+									<div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-3">
+										<span>Nombre</span>
+										<span className="font-semibold text-gray-900">{firstPet.name}</span>
+									</div>
+									<div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-3">
+										<span>Tipo</span>
+										<span className="font-semibold text-gray-900">{firstPet.type}</span>
+									</div>
+									<div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-3">
+										<span>Tamaño</span>
+										<span className="font-semibold text-gray-900">{firstPet.size}</span>
+									</div>
+									<div className="flex items-start justify-between gap-4">
+										<span>Observaciones</span>
+										<span className="max-w-xs text-right font-semibold text-gray-900">
+											{firstPet.observations?.trim() || 'Sin observaciones especiales'}
+										</span>
+									</div>
 								</div>
-								<div className="flex items-center justify-between gap-4 border-b border-gray-100 pb-3">
-									<span>Tamaño</span>
-									<span className="font-semibold text-gray-900">Pequeña</span>
+							) : (
+								<div className="mt-6 space-y-4 text-sm text-gray-700">
+									<p className="font-medium text-gray-700">Aún no tienes mascotas registradas.</p>
 								</div>
-								<div className="flex items-start justify-between gap-4">
-									<span>Observaciones</span>
-									<span className="max-w-xs text-right font-semibold text-gray-900">Sin observaciones especiales</span>
-								</div>
-							</div>
+							)}
 						</div>
 
 						<div className="rounded-3xl border border-teal-100 bg-gradient-to-br from-teal-50 to-white p-6 shadow-sm sm:p-8">
